@@ -1,0 +1,80 @@
+name: Build release APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - build-release-apk
+    paths:
+      - 'GeForceNowOptimizer-Android-0.1.0.zip'
+      - '.github/workflows/build-release-apk.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Extract Android project
+        id: extract
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$GITHUB_WORKSPACE/GeForceNowOptimizer-Android-0.1.0.zip"
+          test -f "$archive" || { echo "Archive not found: $archive"; exit 1; }
+          mkdir -p "$GITHUB_WORKSPACE/extracted"
+          unzip -q "$archive" -d "$GITHUB_WORKSPACE/extracted"
+          wrapper="$(find "$GITHUB_WORKSPACE/extracted" -type f -name gradlew -print -quit)"
+          if [[ -z "$wrapper" ]]; then
+            echo "No Gradle wrapper (gradlew) was found in the ZIP archive."
+            echo "The project must include its Gradle wrapper to build reliably."
+            exit 1
+          fi
+          project_dir="$(dirname "$wrapper")"
+          chmod +x "$wrapper"
+          echo "project_dir=$project_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Build release APK
+        shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
+        run: |
+          set -euo pipefail
+          cd "$PROJECT_DIR"
+          ./gradlew --no-daemon assembleRelease
+
+      - name: Collect APK
+        shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$GITHUB_WORKSPACE/apk-artifacts"
+          find "$PROJECT_DIR" -type f -path '*/build/outputs/apk/release/*.apk' \
+            -exec cp '{}' "$GITHUB_WORKSPACE/apk-artifacts/" \;
+          if ! compgen -G "$GITHUB_WORKSPACE/apk-artifacts/*.apk" > /dev/null; then
+            echo "Gradle completed but no release APK was found."
+            exit 1
+          fi
+          ls -lh "$GITHUB_WORKSPACE/apk-artifacts"
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: apk-artifacts/*.apk
+          if-no-files-found: error
+          retention-days: 14
