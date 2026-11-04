@@ -7,7 +7,7 @@ on:
       - build-release-apk
     paths:
       - 'GeForceNowOptimizer-Android-0.1.0.zip'
-      - '.github/workflows/build-release-apk.yml'
+      - '.github/workflows/build.yml'
 
 permissions:
   contents: read
@@ -15,6 +15,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -27,22 +28,33 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: true
+          packages: |
+            platform-tools
 
       - name: Extract Android project
         id: extract
         shell: bash
         run: |
           set -euo pipefail
+
           archive="$GITHUB_WORKSPACE/GeForceNowOptimizer-Android-0.1.0.zip"
-          test -f "$archive" || { echo "Archive not found: $archive"; exit 1; }
-          mkdir -p "$GITHUB_WORKSPACE/extracted"
-          unzip -q "$archive" -d "$GITHUB_WORKSPACE/extracted"
-          wrapper="$(find "$GITHUB_WORKSPACE/extracted" -type f -name gradlew -print -quit)"
-          if [[ -z "$wrapper" ]]; then
-            echo "No Gradle wrapper (gradlew) was found in the ZIP archive."
-            echo "The project must include its Gradle wrapper to build reliably."
+          if [[ ! -f "$archive" ]]; then
+            echo "No se encontró el archivo: $archive"
             exit 1
           fi
+
+          extract_dir="$GITHUB_WORKSPACE/extracted"
+          mkdir -p "$extract_dir"
+          unzip -q "$archive" -d "$extract_dir"
+
+          wrapper="$(find "$extract_dir" -type f -name gradlew -print -quit)"
+          if [[ -z "$wrapper" ]]; then
+            echo "No se encontró gradlew dentro del ZIP."
+            exit 1
+          fi
+
           project_dir="$(dirname "$wrapper")"
           chmod +x "$wrapper"
           echo "project_dir=$project_dir" >> "$GITHUB_OUTPUT"
@@ -56,20 +68,27 @@ jobs:
           cd "$PROJECT_DIR"
           ./gradlew --no-daemon assembleRelease
 
-      - name: Collect APK
+      - name: Collect release APK
         shell: bash
         env:
           PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
         run: |
           set -euo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/apk-artifacts"
-          find "$PROJECT_DIR" -type f -path '*/build/outputs/apk/release/*.apk' \
-            -exec cp '{}' "$GITHUB_WORKSPACE/apk-artifacts/" \;
-          if ! compgen -G "$GITHUB_WORKSPACE/apk-artifacts/*.apk" > /dev/null; then
-            echo "Gradle completed but no release APK was found."
+
+          artifact_dir="$GITHUB_WORKSPACE/apk-artifacts"
+          mkdir -p "$artifact_dir"
+
+          find "$PROJECT_DIR" \
+            -type f \
+            -path '*/build/outputs/apk/release/*.apk' \
+            -exec cp '{}' "$artifact_dir/" \;
+
+          if ! compgen -G "$artifact_dir/*.apk" > /dev/null; then
+            echo "La compilación terminó, pero no se encontró ningún APK release."
             exit 1
           fi
-          ls -lh "$GITHUB_WORKSPACE/apk-artifacts"
+
+          ls -lh "$artifact_dir"
 
       - name: Upload release APK
         uses: actions/upload-artifact@v4
