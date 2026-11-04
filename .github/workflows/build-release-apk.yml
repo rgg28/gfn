@@ -20,7 +20,7 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Java
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -32,8 +32,16 @@ jobs:
           accept-android-sdk-licenses: true
           packages: |
             platform-tools
+            cmdline-tools;latest
+            platforms;android-34
+            build-tools;34.0.0
 
-      - name: Extract Android project
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: Extract project from ZIP
         id: extract
         shell: bash
         run: |
@@ -41,7 +49,7 @@ jobs:
 
           archive="$GITHUB_WORKSPACE/GeForceNowOptimizer-Android-0.1.0.zip"
           if [[ ! -f "$archive" ]]; then
-            echo "No se encontró el archivo: $archive"
+            echo "No se encontró el ZIP: $archive"
             exit 1
           fi
 
@@ -49,15 +57,25 @@ jobs:
           mkdir -p "$extract_dir"
           unzip -q "$archive" -d "$extract_dir"
 
-          wrapper="$(find "$extract_dir" -type f -name gradlew -print -quit)"
-          if [[ -z "$wrapper" ]]; then
-            echo "No se encontró gradlew dentro del ZIP."
+          settings_file="$(find "$extract_dir" -type f \( -name 'settings.gradle' -o -name 'settings.gradle.kts' \) -print -quit)"
+          if [[ -z "$settings_file" ]]; then
+            echo "No se encontró settings.gradle ni settings.gradle.kts dentro del ZIP."
+            echo "Estructura encontrada:"
+            find "$extract_dir" -maxdepth 4 -print | sort
             exit 1
           fi
 
-          project_dir="$(dirname "$wrapper")"
-          chmod +x "$wrapper"
+          project_dir="$(dirname "$settings_file")"
           echo "project_dir=$project_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Show project structure
+        shell: bash
+        env:
+          PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
+        run: |
+          set -euo pipefail
+          echo "PROJECT_DIR=$PROJECT_DIR"
+          find "$PROJECT_DIR" -maxdepth 3 -print | sort
 
       - name: Build release APK
         shell: bash
@@ -66,15 +84,14 @@ jobs:
         run: |
           set -euo pipefail
           cd "$PROJECT_DIR"
-          ./gradlew --no-daemon assembleRelease
+          gradle --no-daemon assembleRelease
 
-      - name: Collect release APK
+      - name: Collect APK
         shell: bash
         env:
           PROJECT_DIR: ${{ steps.extract.outputs.project_dir }}
         run: |
           set -euo pipefail
-
           artifact_dir="$GITHUB_WORKSPACE/apk-artifacts"
           mkdir -p "$artifact_dir"
 
@@ -84,7 +101,7 @@ jobs:
             -exec cp '{}' "$artifact_dir/" \;
 
           if ! compgen -G "$artifact_dir/*.apk" > /dev/null; then
-            echo "La compilación terminó, pero no se encontró ningún APK release."
+            echo "La compilación terminó pero no se encontró ningún APK release."
             exit 1
           fi
 
